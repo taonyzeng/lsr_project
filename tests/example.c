@@ -1,6 +1,18 @@
 #include <stdio.h>
 
 int main(int argc, const char** argv) {
+
+    /*int t = 0;
+
+    for (int i = 0; i < 9; i = i + 1) {
+      int j = 3 * i + 1; // <i,3,1> 
+
+      t = t + j;
+    }
+
+    printf("t=%i\n", t);
+    return t;*/
+
     int num = 4, j = 0, k = 0, l = 0;
     int a[30] = {1, 1, 1, 1, 1, 1,
                  1, 1, 2, 3, 4, 6,

@@ -1,49 +1,28 @@
-#include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/Analysis/LoopInfo.h" 
-#include "llvm/Analysis/LoopPass.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/InstrTypes.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/LegacyPassManager.h"
-#include "llvm/IR/Module.h"
-#include "llvm/Pass.h"
-#include "llvm/Transforms/IPO/PassManagerBuilder.h"
-#include "llvm/Transforms/Scalar.h"
-#include "llvm/Transforms/Utils.h"
-#include "llvm/Transforms/Utils/BasicBlockUtils.h"
-//#include "IVIdentify.hpp"
-#include "llvm//Analysis/IVUsers.h"
-#include "llvm/Support/raw_ostream.h"
 
-using namespace llvm;
+#include "LoopStrengthReduction.hpp"
 
-#include <tuple>
-#include <map>
-#include <iostream>
-using namespace std;
 
 namespace {
-  struct SkeletonPass : public FunctionPass {
-    static char ID;
-    SkeletonPass() : FunctionPass(ID) {}
 
-    void getAnalysisUsage(AnalysisUsage &AU) const {
+    void LSRPass::getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesCFG();
       AU.addRequired<LoopInfoWrapperPass>();
       AU.addRequired<TargetLibraryInfoWrapperPass>();
       //AU.addRequired<IVUsersWrapperPass>();
     }
 
-    virtual bool runOnLoop(Loop *L, LPPassManager &no_use) {
+    bool LSRPass::runOnLoop(Loop *L, LPPassManager &no_use) {
 
       IVUsersWrapperPass* pass = (IVUsersWrapperPass* )createIVUsersPass();
       pass->runOnLoop(L, no_use);
 
       pass->print(llvm::outs());
+
+      return false;
     }
 
-    virtual bool runOnFunction(Function &F) {
+
+    bool LSRPass::preprocess(Function& F, legacy::FunctionPassManager& FPM) {
       // craete llvm function with
       LLVMContext &Ctx = F.getContext();
       std::vector<Type*> paramTypes = {Type::getInt32Ty(Ctx)};
@@ -53,13 +32,6 @@ namespace {
       //Constant *logFunc = module->getOrInsertFunction("logop", logFuncType);
       module->getOrInsertFunction("logop", logFuncType);
 
-      // perform constant prop and loop analysis
-      // should not call other passes with runOnFunction
-      // which may overwrite the original pass manager
-      LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-
-      // apply useful passes
-      legacy::FunctionPassManager FPM(module);
       FPM.add(llvm::createCorrelatedValuePropagationPass());
       //FPM.add(createIndVarSimplifyPass());
       FPM.add(createDeadCodeEliminationPass());
@@ -69,22 +41,13 @@ namespace {
       bool changed = FPM.run(F);
       FPM.doFinalization();
 
-      // find all loop induction variables within a loop
-      for(auto* L : LI) {
-        // IndVarMap = {indvar: indvar tuple}
-        // indvar tuple = (basic_indvar, scale, const)
-        // indvar = basic_indvar * scale + const
-        map<Value*, tuple<Value*, int, int> > IndVarMap;
+      return changed;
+    }
 
-        // all induction variables should have phi nodes in the header
-        // notice that this might add additional variables, they are treated as basic induction
-        // variables for now
-        // the preheader block
-        BasicBlock* b_preheader = L->getLoopPreheader();
+    void LSRPass::identifyInductionVariable(Loop *L, DenseMap<Value*, tuple<Value*, int, int>>& IndVarMap) {
+
         // the header block
         BasicBlock* b_header = L->getHeader();
-        // the body block
-        BasicBlock* b_body;
 
         for (auto &I : *b_header) {
           if (PHINode *PN = dyn_cast<PHINode>(&I)) {
@@ -100,7 +63,7 @@ namespace {
         // keep modifying the set until the size does not change
         // notice that over here, our set of induction variables is not precise
         while (true) {
-          map<Value*, tuple<Value*, int, int> > NewMap = IndVarMap;
+          int start_size = IndVarMap.size();
           // iterate through all blocks in the loop
           for (auto B: blks) {
             // iterate through all its instructions
@@ -120,13 +83,13 @@ namespace {
 
                       tuple<Value*, int, int> t = IndVarMap[lhs];
                       int new_val = CIR->getSExtValue() + get<2>(t);
-                      NewMap[&I] = make_tuple(get<0>(t), get<1>(t), new_val);
+                      IndVarMap[&I] = make_tuple(get<0>(t), get<1>(t), new_val);
                     } 
                     else if (IndVarMap.count(rhs) && CIL) {
                       
                       tuple<Value*, int, int> t = IndVarMap[rhs];
                       int new_val = CIL->getSExtValue() + get<2>(t);
-                      NewMap[&I] = make_tuple(get<0>(t), get<1>(t), new_val);
+                      IndVarMap[&I] = make_tuple(get<0>(t), get<1>(t), new_val);
                     }
                   } 
                   // case: Sub
@@ -136,12 +99,12 @@ namespace {
                     if (IndVarMap.count(lhs) &&  CIR) {
                       tuple<Value*, int, int> t = IndVarMap[lhs];
                       int new_val = get<2>(t) - CIR->getSExtValue();
-                      NewMap[&I] = make_tuple(get<0>(t), get<1>(t), new_val);
+                      IndVarMap[&I] = make_tuple(get<0>(t), get<1>(t), new_val);
                     } 
                     else if (IndVarMap.count(rhs) &&  CIL) {
                       tuple<Value*, int, int> t = IndVarMap[rhs];
                       int new_val = get<2>(t) - CIL->getSExtValue();
-                      NewMap[&I] = make_tuple(get<0>(t), get<1>(t), new_val);
+                      IndVarMap[&I] = make_tuple(get<0>(t), get<1>(t), new_val);
                     }
                   } 
                   // case: Mul
@@ -151,12 +114,12 @@ namespace {
                     if (IndVarMap.count(lhs) && CIR) {
                       tuple<Value*, int, int> t = IndVarMap[lhs];
                       int new_val = CIR->getSExtValue() * get<1>(t);
-                      NewMap[&I] = make_tuple(get<0>(t), new_val, get<2>(t));
+                      IndVarMap[&I] = make_tuple(get<0>(t), new_val, get<2>(t));
                     } 
                     else if (IndVarMap.count(rhs) &&  CIL) {
                       tuple<Value*, int, int> t = IndVarMap[rhs];
                       int new_val = CIL->getSExtValue() * get<1>(t);
-                      NewMap[&I] = make_tuple(get<0>(t), new_val, get<2>(t));
+                      IndVarMap[&I] = make_tuple(get<0>(t), new_val, get<2>(t));
                     }
                   }
                   //case: div
@@ -168,27 +131,64 @@ namespace {
                     if (IndVarMap.count(lhs) && CIR) {
                       tuple<Value*, int, int> t = IndVarMap[lhs];
                       int new_val = CIR->getSExtValue() / get<1>(t);
-                      NewMap[&I] = make_tuple(get<0>(t), new_val, get<2>(t));
+                      IndVarMap[&I] = make_tuple(get<0>(t), new_val, get<2>(t));
                     } 
                     else if (IndVarMap.count(rhs) &&  CIL) {
                       tuple<Value*, int, int> t = IndVarMap[rhs];
                       int new_val = CIL->getSExtValue() / get<1>(t);
-                      NewMap[&I] = make_tuple(get<0>(t), new_val, get<2>(t));
+                      IndVarMap[&I] = make_tuple(get<0>(t), new_val, get<2>(t));
                     }
                   }
                 } // if operand in indvar
               } // if op is binop
             } // auto &I: B
           } // auto &B: blks
-          if (NewMap.size() == IndVarMap.size()) break;
-          else IndVarMap = NewMap;
+
+          if (IndVarMap.size() == start_size){
+            break;
+          } 
         }
+
+    }
+
+    bool LSRPass::runOnFunction(Function &F) {
+
+      Module* module = F.getParent();
+      // apply useful passes
+      legacy::FunctionPassManager FPM(module);
+
+      this->preprocess(F, FPM);
+
+      // perform constant prop and loop analysis
+      // should not call other passes with runOnFunction
+      // which may overwrite the original pass manager
+      LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+
+      // find all loop induction variables within a loop
+      for(auto* L : LI) {
+
+        // IndVarMap = {indvar: indvar tuple}
+        // indvar tuple = (basic_indvar, scale, const)
+        // indvar = basic_indvar * scale + const
+        DenseMap<Value*, tuple<Value*, int, int>> IndVarMap;
+
+        this->identifyInductionVariable(L, IndVarMap);
 
         // now modify the loop to apply strength reduction
         map<Value*, PHINode*> PhiMap;
         // note that after loop simplification
         // we will only have a unique header and preheader
-        //
+
+
+        // all induction variables should have phi nodes in the header
+        // notice that this might add additional variables, they are treated as basic induction
+        // variables for now
+        // the preheader block
+        BasicBlock* b_preheader = L->getLoopPreheader();
+        // the header block
+        BasicBlock* b_header = L->getHeader();
+        // the body block
+        BasicBlock* b_body;
 
         // modify the preheader block by inserting new phi nodes
         Value* preheader_val;
@@ -251,21 +251,20 @@ namespace {
           (phi_val.first)->replaceAllUsesWith(phi_val.second);
         }
 
-      } // finish all loops
-
+      } //finish all loops
 
       // do another round of optimization
       FPM.doInitialization();
-      changed = FPM.run(F);
+      FPM.run(F);
       FPM.doFinalization();
 
       return true;
     } // finish processing loops
-  };
 }
 
-char SkeletonPass::ID = 0;
-static RegisterPass<SkeletonPass> X("sr", "Stregth Reduction Pass",
+
+char LSRPass::ID = 0;
+static RegisterPass<LSRPass> X("lsr", "Stregth Reduction Pass",
                                     false /* Only looks at CFG */,
                                     true /* Not Analysis Pass */);
 
@@ -273,8 +272,9 @@ static RegisterPass<SkeletonPass> X("sr", "Stregth Reduction Pass",
 // http://adriansampson.net/blog/clangpass.html
 static void registerSkeletonPass(const PassManagerBuilder &,
                          legacy::PassManagerBase &PM) {
-  PM.add(new SkeletonPass());
+  PM.add(new LSRPass());
 }
+
 static RegisterStandardPasses
   RegisterMyPass(PassManagerBuilder::EP_LoopOptimizerEnd,
                  registerSkeletonPass);

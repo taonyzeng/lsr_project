@@ -1,15 +1,19 @@
-#CS5544 Assignment 3: README
-#Group: ZENG TAO
+#CS5544 Final Project: README
+#Group: TAO ZENG
 
 /////////////////////////////////
-# llvm_assignment3 LICM
+# Final Project, Loop Strength Induction
 
-To compile the loop invariant code motion pass
-# go to the LICM folder
-$cd LICM
-
-# run make to compile the LICM pass and the test files under the tests folder. 
+# To compile the project
 $make
 
-# To run the LSR pass
-$opt -enable-new-pm=0 --loop-simplify -load ../LoopStrengthReduction.so --sr ./m2r_lsr_bench1.bc -o out_lsr_bench1
+# To run the test program 
+$cd tests
+$./run.sh
+
+# To run the benchmarks
+$cd ./tests/benchmark
+
+# This script will run the optimization pass on the program,
+# and generate the performace report. 
+$./run.sh

@@ -1,4 +1,8 @@
 
+make clean
+
+make
+
 for f in *.c
 do
   filename="${f%.*}"
@@ -13,7 +17,7 @@ do
   #opt -enable-new-pm=0 -S -load build/skeleton/libSkeletonPass.so -mem2reg --sr ${f} -o opt_${f}.bc
   filename="${f%.*}"
 
-  opt -enable-new-pm=0 --loop-simplify -load ../../LoopStrengthReduction.so --sr ${f} -o opt_${filename}.bc
+  opt -enable-new-pm=0 --loop-simplify -load ../../LoopStrengthReduction.so --lsr ${f} -o opt_${filename}.bc
   llc -filetype=obj opt_${filename}.bc 
   #gcc opt_${filename}.o -lm -o opt_${filename}.out -fPIE
   clang opt_${filename}.o ./support/beebsc.c -lm -O0 -Xclang -disable-O0-optnone -I./support -o opt_${filename}.out
