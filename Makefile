@@ -1,4 +1,4 @@
-all: LoopStrengthReduction.so sub-make
+all: LoopStrengthReduction.so IndvarElimination.so sub-make
 
 LIB_DIR = ../LIBS
 SRC_DIR = src
@@ -11,7 +11,12 @@ TEST = tests
 LoopStrengthReduction.o: $(SRC_DIR)/LoopStrengthReduction.cpp
 #IVIdentify.o: $(SRC_DIR)/IVIdentify.cpp
 
+IndvarElimination.o: $(SRC_DIR)/IndvarElimination.cpp
+
 LoopStrengthReduction.so: $(SRC_DIR)/LoopStrengthReduction.o #$(SRC_DIR)/IVIdentify.o 
+	$(CXX) -dylib -shared $^ -o $@
+
+IndvarElimination.so: $(SRC_DIR)/IndvarElimination.o #$(SRC_DIR)/IVIdentify.o 
 	$(CXX) -dylib -shared $^ -o $@
 
 sub-make:

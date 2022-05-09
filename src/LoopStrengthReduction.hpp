@@ -39,6 +39,8 @@ namespace {
             static char ID;
 
             LSRPass() : FunctionPass(ID) {}
+            bool checkUsage(Value* v, Value* icmp);
+            bool replaceInductionVariable(Loop* L, DenseMap<Value*, tuple<Value*, int, int>>& IndVarMap);
 
             virtual void getAnalysisUsage(AnalysisUsage& AU) const;
 
